@@ -212,52 +212,52 @@ func (u *UPlaneConn) serve(ctx context.Context) error {
 
 		raw := make([]byte, n)
 		copy(raw, buf)
-		go func() {
-			// just forward T-PDU instead of passing it to reader if relayer is
-			// configured and the message type is T-PDU.
-			if len(u.relayMap) != 0 && raw[1] == message.MsgTypeTPDU {
-				// ignore if the packet size is smaller than minimum header size
-				if n < 11 {
-					return
+		// [modify] not use go routine
+
+		// just forward T-PDU instead of passing it to reader if relayer is
+		// configured and the message type is T-PDU.
+		if len(u.relayMap) != 0 && raw[1] == message.MsgTypeTPDU {
+			// ignore if the packet size is smaller than minimum header size
+			if n < 11 {
+				continue
+			}
+
+			u.mu.Lock()
+			peer, ok := u.relayMap[binary.BigEndian.Uint32(raw[4:8])]
+			u.mu.Unlock()
+			if !ok { // pass message to handler if TEID is unknown
+				msg, err := message.Parse(raw[:n])
+				if err != nil {
+					continue
 				}
 
-				u.mu.Lock()
-				peer, ok := u.relayMap[binary.BigEndian.Uint32(raw[4:8])]
-				u.mu.Unlock()
-				if !ok { // pass message to handler if TEID is unknown
-					msg, err := message.Parse(raw[:n])
-					if err != nil {
-						return
-					}
-
-					if err := u.handleMessage(raddr, msg); err != nil {
-						// should not stop serving with this error
-						logf("error handling message on UPlaneConn %s: %v", u.LocalAddr(), err)
-					}
-					return
-				}
-
-				// just use original packet not to get it slow.
-				binary.BigEndian.PutUint32(raw[4:8], peer.teid)
-				if _, err := peer.srcConn.WriteTo(raw[:n], peer.addr); err != nil {
+				if err := u.handleMessage(raddr, msg); err != nil {
 					// should not stop serving with this error
-					logf("error sending on UPlaneConn %s: %v", u.LocalAddr(), err)
+					logf("error handling message on UPlaneConn %s: %v", u.LocalAddr(), err)
 				}
-				return
+				continue
 			}
 
-			msg, err := message.Parse(raw[:n])
-			if err != nil {
-				logf("error parsing message on UPlaneConn %s: %v", u.LocalAddr(), err)
-				return
-			}
-
-			if err := u.handleMessage(raddr, msg); err != nil {
+			// just use original packet not to get it slow.
+			binary.BigEndian.PutUint32(raw[4:8], peer.teid)
+			if _, err := peer.srcConn.WriteTo(raw[:n], peer.addr); err != nil {
 				// should not stop serving with this error
-				logf("error handling message on UPlaneConn %s: %v", u.LocalAddr(), err)
-				return
+				logf("error sending on UPlaneConn %s: %v", u.LocalAddr(), err)
 			}
-		}()
+			continue
+		}
+
+		msg, err := message.Parse(raw[:n])
+		if err != nil {
+			logf("error parsing message on UPlaneConn %s: %v", u.LocalAddr(), err)
+			continue
+		}
+
+		if err := u.handleMessage(raddr, msg); err != nil {
+			// should not stop serving with this error
+			logf("error handling message on UPlaneConn %s: %v", u.LocalAddr(), err)
+			continue
+		}
 	}
 }
 
